@@ -73,3 +73,6 @@ streamlit_reports/
 .coverage
 htmlcov/
 .pytest_cache/
+
+# 忽略下载的字体
+fonts/

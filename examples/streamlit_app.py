@@ -8,6 +8,13 @@ import sys
 import streamlit as st
 from datetime import datetime
 import json
+from fpdf import FPDF
+try:
+    import markdown as md  # 用于将Markdown转为HTML
+except Exception:
+    md = None
+from fpdf.html import HTMLMixin
+import urllib.request
 
 # 添加src目录到Python路径
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
@@ -17,6 +24,99 @@ from src import DeepSearchAgent, Config
 
 # 历史记录数据库路径（指向项目根目录）
 HISTORY_DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "history.db"))
+
+# PDF中文字体配置
+FONT_DIR = os.path.join(os.path.dirname(__file__), "fonts")
+FONT_PATH = os.path.join(FONT_DIR, "NotoSansCJKsc-Regular.otf")
+FONT_DOWNLOAD_URL = "https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/SimplifiedChinese/NotoSansCJKsc-Regular.otf"
+
+
+def ensure_chinese_font():
+    """确保存在支持中文的字体文件"""
+    if os.path.exists(FONT_PATH):
+        return True, None
+    try:
+        os.makedirs(FONT_DIR, exist_ok=True)
+        urllib.request.urlretrieve(FONT_DOWNLOAD_URL, FONT_PATH)
+        return True, None
+    except Exception as e:
+        return False, str(e)
+
+
+class PDF(FPDF, HTMLMixin):
+    pass
+
+
+def generate_pdf_report(content: str):
+    """使用FPDF生成支持中文的PDF报告"""
+    font_ready, font_error = ensure_chinese_font()
+    if not font_ready:
+        return None, f"下载中文字体失败: {font_error}"
+    try:
+        pdf = PDF(orientation="P", unit="mm", format="A4")
+        # 统一设置页边距，确保有效宽度充足
+        pdf.set_margins(left=12, top=15, right=12)
+        pdf.add_font("NotoSansSC", "", FONT_PATH, uni=True)
+        pdf.set_auto_page_break(auto=True, margin=15)
+        pdf.add_page()
+        # 动态选择安全字体大小，避免单字符也无法放下的情况
+        def choose_font_size() -> int:
+            size = 12
+            effective_width = pdf.w - pdf.l_margin - pdf.r_margin
+            # 选择代表性的中英文字符进行宽度测试
+            test_chars = ["汉", "W"]
+            while size >= 7:
+                pdf.set_font("NotoSansSC", size=size)
+                if max(pdf.get_string_width(ch) for ch in test_chars) < effective_width:
+                    return size
+                size -= 1
+            return 7
+        base_size = choose_font_size()
+        pdf.set_font("NotoSansSC", size=base_size)
+        line_height = base_size * 0.6  # 合理的行高
+        effective_width = pdf.w - pdf.l_margin - pdf.r_margin
+        # 优先：将Markdown转换为HTML并用HTML渲染，以保留基础样式
+        rendered = False
+        if md is not None:
+            try:
+                html = md.markdown(
+                    content,
+                    extensions=["extra", "sane_lists", "nl2br"]
+                )
+                # 设置当前字体后渲染HTML
+                pdf.set_font("NotoSansSC", size=base_size)
+                pdf.write_html(html)
+                rendered = True
+            except Exception:
+                rendered = False
+        # 回退：逐行写入纯文本
+        if not rendered:
+            for raw_line in content.split("\n"):
+                line = raw_line if raw_line is not None else ""
+                if line.strip() == "":
+                    pdf.ln(line_height)
+                    continue
+                pdf.set_x(pdf.l_margin)
+                try:
+                    pdf.multi_cell(effective_width, line_height, line)
+                except Exception:
+                    # 退路1：插入零宽空格以帮助换行
+                    try:
+                        safe_line = "\u200b".join(list(line))
+                        pdf.multi_cell(effective_width, line_height, safe_line)
+                    except Exception:
+                        # 退路2：降级为可编码字符
+                        ascii_fallback = line.encode("latin-1", "replace").decode("latin-1")
+                        pdf.multi_cell(effective_width, line_height, ascii_fallback)
+        output_buffer = pdf.output(dest="S")
+        if isinstance(output_buffer, (bytes, bytearray)):
+            pdf_bytes = bytes(output_buffer)
+        else:
+            # 兼容旧版本返回 str 的情况
+            pdf_bytes = str(output_buffer).encode("latin1", errors="replace")
+        return pdf_bytes, None
+    except Exception as e:
+        return None, str(e)
 
 
 def get_history_records():
@@ -384,8 +484,18 @@ def main():
                             key=f"download_md_{record_id}"
                         )
                     with col2:
-                        # 可以添加其他下载格式
-                        st.info("更多下载选项")
+                        # PDF下载（历史记录）
+                        pdf_bytes, pdf_err = generate_pdf_report(report)
+                        st.download_button(
+                            label="下载PDF报告",
+                            data=pdf_bytes if pdf_bytes else b"",
+                            file_name=f"deep_search_report_{record_id}_{time_str.replace(' ', '_').replace(':', '-')}.pdf",
+                            mime="application/pdf",
+                            disabled=pdf_bytes is None,
+                            key=f"download_pdf_{record_id}"
+                        )
+                        if pdf_err:
+                            st.caption(f"PDF生成失败：{pdf_err}")
 
 
 def execute_research(query: str, config: Config):
@@ -516,6 +626,19 @@ def display_results(agent: DeepSearchAgent, final_report: str):
             file_name=f"deep_search_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
             mime="text/markdown"
         )
+        
+        # PDF下载
+        pdf_bytes, pdf_error = generate_pdf_report(final_report)
+        
+        st.download_button(
+            label="下载PDF报告",
+            data=pdf_bytes if pdf_bytes else b"",
+            file_name=f"deep_search_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+            mime="application/pdf",
+            disabled=pdf_bytes is None
+        )
+        if pdf_error:
+            st.error(f"生成PDF报告失败: {pdf_error}")
         
         # JSON状态下载
         state_json = agent.state.to_json()
