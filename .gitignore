@@ -29,6 +29,7 @@ env/
 ENV/
 env.bak/
 venv.bak/
+DSAvenv/
 
 # 环境变量文件
 .env
@@ -63,6 +64,7 @@ streamlit_reports/
 *.md
 !README.md
 !LICENSE
+*.db
 
 # Streamlit
 .streamlit/
