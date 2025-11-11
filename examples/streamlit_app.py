@@ -9,11 +9,6 @@ import streamlit as st
 from datetime import datetime
 import json
 from fpdf import FPDF
-try:
-    import markdown as md  # 用于将Markdown转为HTML
-except Exception:
-    md = None
-from fpdf.html import HTMLMixin
 import urllib.request
 
 # 添加src目录到Python路径
@@ -43,7 +38,7 @@ def ensure_chinese_font():
         return False, str(e)
 
 
-class PDF(FPDF, HTMLMixin):
+class PDF(FPDF):
     pass
 
 
@@ -58,7 +53,9 @@ def generate_pdf_report(content: str):
         pdf.set_margins(left=12, top=15, right=12)
         pdf.add_font("NotoSansSC", "", FONT_PATH, uni=True)
         pdf.set_auto_page_break(auto=True, margin=15)
-        pdf.add_page()
+        # 确保至少有一个页面
+        if pdf.page_no() == 0:
+            pdf.add_page()
         # 动态选择安全字体大小，避免单字符也无法放下的情况
         def choose_font_size() -> int:
             size = 12
@@ -73,41 +70,55 @@ def generate_pdf_report(content: str):
             return 7
         base_size = choose_font_size()
         pdf.set_font("NotoSansSC", size=base_size)
-        line_height = base_size * 0.6  # 合理的行高
+        line_height = max(6, base_size * 0.6)  # 合理的行高
         effective_width = pdf.w - pdf.l_margin - pdf.r_margin
-        # 优先：将Markdown转换为HTML并用HTML渲染，以保留基础样式
-        rendered = False
-        if md is not None:
-            try:
-                html = md.markdown(
-                    content,
-                    extensions=["extra", "sane_lists", "nl2br"]
-                )
-                # 设置当前字体后渲染HTML
-                pdf.set_font("NotoSansSC", size=base_size)
-                pdf.write_html(html)
-                rendered = True
-            except Exception:
-                rendered = False
-        # 回退：逐行写入纯文本
-        if not rendered:
-            for raw_line in content.split("\n"):
-                line = raw_line if raw_line is not None else ""
-                if line.strip() == "":
+        # 简易Markdown渲染：避免 HTML 写入导致的重叠，保证稳定换行
+        def write_paragraph(text: str, size: int):
+            pdf.set_font("NotoSansSC", size=size)
+            lh = max(6, size * 0.6)
+            pdf.set_x(pdf.l_margin)
+            pdf.multi_cell(effective_width, lh, text)
+        
+        in_code_block = False
+        for raw_line in content.split("\n"):
+            line = "" if raw_line is None else raw_line.rstrip()
+            # 代码块切换
+            if line.strip().startswith("```"):
+                in_code_block = not in_code_block
+                if not in_code_block:
                     pdf.ln(line_height)
-                    continue
-                pdf.set_x(pdf.l_margin)
+                continue
+            if in_code_block:
+                write_paragraph(line, max(9, base_size - 1))
+                continue
+            # 标题
+            if line.startswith("#"):
+                level = len(line) - len(line.lstrip("#"))
+                title = line[level:].strip()
+                size = min(20, base_size + (6 - min(level, 6)) * 2)
+                write_paragraph(title, size)
+                pdf.ln(line_height / 2)
+                continue
+            # 无序列表
+            if line.strip().startswith(("- ", "* ")):
+                item = line.strip()[2:].strip()
+                write_paragraph("• " + item, base_size)
+                continue
+            # 空行
+            if line.strip() == "":
+                pdf.ln(line_height)
+                continue
+            # 普通段落
+            try:
+                write_paragraph(line, base_size)
+            except Exception:
+                # 插入零宽空格帮助换行
                 try:
-                    pdf.multi_cell(effective_width, line_height, line)
+                    safe_line = "\u200b".join(list(line))
+                    write_paragraph(safe_line, base_size)
                 except Exception:
-                    # 退路1：插入零宽空格以帮助换行
-                    try:
-                        safe_line = "\u200b".join(list(line))
-                        pdf.multi_cell(effective_width, line_height, safe_line)
-                    except Exception:
-                        # 退路2：降级为可编码字符
-                        ascii_fallback = line.encode("latin-1", "replace").decode("latin-1")
-                        pdf.multi_cell(effective_width, line_height, ascii_fallback)
+                    ascii_fallback = line.encode("latin-1", "replace").decode("latin-1")
+                    write_paragraph(ascii_fallback, base_size)
         output_buffer = pdf.output(dest="S")
         if isinstance(output_buffer, (bytes, bytearray)):
             pdf_bytes = bytes(output_buffer)
