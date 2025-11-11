@@ -15,8 +15,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from src import DeepSearchAgent, Config
 
 
-# 历史记录数据库路径
-HISTORY_DB_PATH = os.path.join(os.path.dirname(__file__), "history.db")
+# 历史记录数据库路径（指向项目根目录）
+HISTORY_DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "history.db"))
 
 
 def get_history_records():
