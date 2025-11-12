@@ -350,6 +350,21 @@ def main():
             model_name = st.selectbox("OpenAI模型", ["gpt-4o-mini", "gpt-4o"])
             openai_key = st.text_input("OpenAI API Key", type="password",
                                      value="")
+        
+        # 明文查看与复制（谨慎）
+        st.divider()
+        with st.expander("查看已保存的API密钥（明文）", expanded=False):
+            st.caption("注意：密钥将以明文显示，请勿在公共环境中展示。")
+            show_keys = st.checkbox("显示API密钥（明文）", value=False, key="show_api_keys_checkbox")
+            if show_keys:
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    st.text_input("DeepSeek（已保存）", value=deepseek_default or "", key="view_deepseek_key", type="default")
+                with col_b:
+                    st.text_input("Tavily（已保存）", value=tavily_default or "", key="view_tavily_key", type="default")
+                # 如果当前选择OpenAI提供商，展示当前输入的OpenAI Key以便复制
+                if llm_provider == "openai":
+                    st.text_input("OpenAI（当前会话）", value=openai_key if 'openai_key' in locals() else "", key="view_openai_key", type="default")
     
     # 新研究标签页
     with main_tab1:
